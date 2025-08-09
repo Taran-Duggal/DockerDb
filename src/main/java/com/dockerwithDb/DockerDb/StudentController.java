@@ -1,10 +1,7 @@
 package com.dockerwithDb.DockerDb;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -14,6 +11,11 @@ public class StudentController {
 
     @Autowired
     private StudentRepo studentRepo;
+
+    @GetMapping("/")
+    public String hello(){
+        return "hello i did it";
+    }
 
     @RequestMapping("/getStudents")
     public List<Student> getStudents(){
