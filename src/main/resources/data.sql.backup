@@ -1,0 +1,5 @@
+--INSERT INTO student (name, age) VALUES ('A', 1);
+--INSERT INTO student (name, age) VALUES ('B', 2);
+--INSERT INTO student (name, age) VALUES ('C', 3);
+--INSERT INTO student (name, age) VALUES ('D', 4);
+--INSERT INTO student (name, age) VALUES ('E', 5);

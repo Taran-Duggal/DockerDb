@@ -1,0 +1,41 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8091:8091"
+    networks:
+      - s-network
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/docdb?autoReconnect=true&allowPublicKeyRetrieval=true&useSSL=false
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: Taransd@2004
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: docdb
+      MYSQL_ROOT_PASSWORD: Taransd@2004
+    ports:
+      - "3307:3306"
+    networks:
+      - s-network
+    volumes:
+      - db-s-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pTaransd@2004"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  s-network:
+    driver: bridge
+
+
+volumes:
+  db-s-data:
+    driver: local
