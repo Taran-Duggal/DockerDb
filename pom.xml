@@ -11,7 +11,7 @@
 	<groupId>com.dockerwithDb</groupId>
 	<artifactId>DockerDb</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<packaging>war</packaging>
+<!--	<packaging>war</packaging>-->
 	<name>DockerDb</name>
 	<description>Demo project for Spring Boot</description>
 	<url/>
