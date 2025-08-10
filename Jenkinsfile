@@ -14,7 +14,7 @@ pipeline {
         stage('Build Artifact') {
             steps {
                 bat 'mvn clean package -DskipTests=true'
-                archiveArtifacts artifacts: 'target/*.jar'
+                archiveArtifacts artifacts: 'target/*.war'
             }
         }
 
