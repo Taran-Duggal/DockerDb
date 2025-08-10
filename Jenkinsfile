@@ -1,171 +1,111 @@
-// pipeline {
-//     agent any
-//     tools {
-//         maven "Maven-3.8.6"
-//     }
-//
-//     stages {
-//         stage('Clone Repo') {
-//             steps {
-//                 git branch: 'main', url: 'https://github.com/Taran-Duggal/DockerDb'
-//             }
-//         }
-//
-//         stage('Build Artifact') {
-//             steps {
-//                 bat 'mvn clean package -DskipTests=true'
-//                 archiveArtifacts artifacts: 'target/*.jar'
-//             }
-//         }
-//
-//         stage('Test Maven - JUnit') {
-//             steps {
-//                 bat 'mvn test'
-//             }
-//             post {
-//                 always {
-//                     script {
-//                         if (fileExists('target/surefire-reports')) {
-//                             junit 'target/surefire-reports/*.xml'
-//                         } else {
-//                             echo 'No test reports found. Skipping junit step.'
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }
-
-
-pipeline{
+pipeline {
     agent any
-
     environment {
         BACKUP_DIR = 'C:\\Jenkins\\Backups\\StudentApp'
         TOMCAT_WEBAPPS = 'C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps'
         TOMCAT_SERVICE = 'Tomcat10'
         APP_NAME = 'student'
+        TOMCAT_STOP_METHOD = 'not_needed' // Default value
     }
 
-    stages{
-        stage('Build'){
-            steps{
-                script{
+    stages {
+        stage('Build') {
+            steps {
+                script {
                     echo "=== Starting Maven Build ==="
-                    echo "Testing Maven Central connectivity..."
 
-                    // Test HTTP connectivity to Maven Central
-                    def httpTest = bat(script: 'curl -I --connect-timeout 10 https://repo.maven.apache.org/maven2/ 2>nul', returnStatus: true)
+                    // Test Maven Central connectivity with timeout
+                    def httpCode = bat(
+                        script: 'curl -s -o nul -w "%{http_code}" --connect-timeout 10 https://repo.maven.apache.org/maven2/',
+                        returnStdout: true
+                    ).trim()
 
-                    if(httpTest == 0) {
-                        echo "Maven Central is accessible - proceeding with normal build"
+                    if(httpCode == "200") {
+                        echo "Maven Central accessible (HTTP ${httpCode}) - proceeding with build"
                         bat 'mvn clean package -DskipTests=true'
                     } else {
-                        echo "HTTPS connection to Maven Central failed - trying alternatives"
-                        try {
-                            bat 'mvn clean package -DskipTests=true -o'
-                            echo "Offline build successful!"
-                        } catch (Exception e) {
-                            echo "Offline build failed - trying with HTTP repository"
-                            bat 'mvn clean package -DskipTests=true -Dmaven.repo.remote=http://repo.maven.apache.org/maven2'
-                        }
+                        echo "Maven Central connection issue (HTTP ${httpCode}) - trying offline build"
+                        bat 'mvn clean package -DskipTests=true -o'
                     }
                 }
             }
-            post{
-                success{
-                    echo 'Build completed successfully!'
-                    echo 'Now Archiving the Artifacts'
-                    archiveArtifacts artifacts: '**/target/*.war'
-                }
-                failure{
-                    echo '=== BUILD FAILED ==='
-                    echo 'Please check Maven configuration and network connectivity'
+            post {
+                success {
+                    archiveArtifacts artifacts: '**/target/*.war', fingerprint: true
                 }
             }
         }
 
-        stage('Pre-Deployment Checks'){
-            steps{
-                script{
+        stage('Pre-Deployment Checks') {
+            steps {
+                script {
                     echo "=== Pre-Deployment Checks ==="
 
-                    // Create backup directory if it doesn't exist
+                    // Create backup directory with error handling
                     bat """
-                        echo "Creating backup directory if it doesn't exist..."
                         if not exist "${BACKUP_DIR}" (
-                            mkdir "${BACKUP_DIR}"
-                            echo "✅ Backup directory created: ${BACKUP_DIR}"
-                        ) else (
-                            echo "✅ Backup directory already exists: ${BACKUP_DIR}"
+                            mkdir "${BACKUP_DIR}" || exit /b 1
+                            echo ✅ Created backup directory
                         )
                     """
 
-                    // Check if Jenkins has permission to access Tomcat directories
+                    // Verify Tomcat directory access
                     bat """
-                        echo "Checking Tomcat directory access..."
-                        if exist "${TOMCAT_WEBAPPS}" (
-                            echo "✅ Tomcat webapps directory accessible"
-                        ) else (
-                            echo "❌ Cannot access Tomcat webapps directory"
+                        if not exist "${TOMCAT_WEBAPPS}" (
+                            echo ❌ Tomcat webapps directory not accessible
                             exit 1
                         )
                     """
 
-                    // Check current Tomcat service status
-                    def serviceStatus = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
-                    echo "Current Tomcat service status: ${serviceStatus}"
+                    // Check Tomcat service status
+                    def serviceStatus = bat(
+                        script: "sc query ${TOMCAT_SERVICE} | findstr STATE",
+                        returnStdout: true
+                    ).trim()
 
                     if(serviceStatus.contains("RUNNING")) {
-                        echo "⚠️  Tomcat is currently running - will need admin privileges to stop"
                         env.TOMCAT_RUNNING = 'true'
+                        echo "⚠️ Tomcat running - will attempt to stop"
                     } else {
-                        echo "✅ Tomcat is not running - can proceed safely"
                         env.TOMCAT_RUNNING = 'false'
+                        echo "✅ Tomcat already stopped"
                     }
                 }
             }
         }
 
-        stage('Create Backup'){
-            steps{
-                script{
+        stage('Create Backup') {
+            steps {
+                script {
                     echo "=== Creating Application Backup ==="
 
-                    // Generate timestamp for backup
-                    def timestamp = bat(script: '@powershell -Command "(Get-Date).ToString(\'yyyyMMdd_HHmmss\')"', returnStdout: true).trim()
-                    env.BACKUP_TIMESTAMP = timestamp
+                    def timestamp = bat(
+                        script: '@powershell -Command "(Get-Date).ToString(\'yyyyMMdd_HHmmss\')"',
+                        returnStdout: true
+                    ).trim()
+
                     env.BACKUP_FILE = "${BACKUP_DIR}\\${APP_NAME}.war.backup.${timestamp}"
 
-                    // Create backup with proper escaping
                     bat """
                         @echo off
-                        set TIMESTAMP=${timestamp}
-                        set BACKUP_FILE=${env.BACKUP_FILE}
-
-                        echo Backup timestamp: %TIMESTAMP%
-                        echo Backup location: %BACKUP_FILE%
+                        setlocal enabledelayedexpansion
 
                         if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" (
-                            echo Creating backup of existing WAR file...
-                            copy "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" "%BACKUP_FILE%"
-                            echo Backup created successfully: %BACKUP_FILE%
+                            echo Creating backup of WAR file...
+                            copy "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" "${env.BACKUP_FILE}" || exit /b 1
 
                             if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}" (
-                                echo Creating backup of application directory...
-                                xcopy "${TOMCAT_WEBAPPS}\\${APP_NAME}" "${BACKUP_DIR}\\${APP_NAME}_%TIMESTAMP%" /E /I /H /Y
-                                echo Application directory backed up
+                                echo Backing up application directory...
+                                robocopy "${TOMCAT_WEBAPPS}\\${APP_NAME}" "${BACKUP_DIR}\\${APP_NAME}_${timestamp}" /MIR /NP /NFL /NDL
                             )
                         ) else (
-                            echo No existing WAR file found - fresh deployment
-                            echo FRESH_DEPLOYMENT > "${BACKUP_DIR}\\deployment_type_%TIMESTAMP%.txt"
+                            echo Fresh deployment detected
+                            echo FRESH_DEPLOYMENT > "${BACKUP_DIR}\\deployment_type_${timestamp}.txt"
                         )
 
-                        echo Cleaning old backups (keeping last 5)...
+                        echo Cleaning old backups...
                         for /f "skip=5 delims=" %%i in ('dir /b /o-d "${BACKUP_DIR}\\${APP_NAME}.war.backup.*" 2^>nul') do (
                             del "${BACKUP_DIR}\\%%i"
-                            echo Removed old backup: %%i
                         )
                     """
                 }
@@ -173,155 +113,131 @@ pipeline{
         }
 
         stage('Stop Tomcat') {
-                    steps {
-                        script {
-                            echo "=== Stopping Tomcat Service ==="
-
-                            withCredentials([usernamePassword(
-                                credentialsId: 'tomcat-admin-creds',
-                                usernameVariable: 'ADMIN_USER',
-                                passwordVariable: 'ADMIN_PASS'
-                            )]) {
-                                // Method 1: Using PowerShell with credentials
-                                bat """
-                                    powershell -Command "\$securePass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force; \
-                                    \$credential = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$securePass); \
-                                    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','net stop ${TOMCAT_SERVICE}' -Credential \$credential -NoNewWindow -Wait"
-                                """
-
-                                // Verify service stopped
-                                def status = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
-                                if(status.contains("STOPPED")) {
-                                    echo "✅ Tomcat service confirmed stopped"
-                                } else {
-                                    error("❌ Failed to stop Tomcat service")
-                                }
-                            }
-                        }
-                    }
-                }
-
-
-        stage('Deploy Application'){
-            steps{
-                bat """
-                    echo "=== Starting Application Deployment ==="
-
-                    echo "Step 1: Removing old application files..."
-                    if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" (
-                        echo "Removing old WAR file..."
-                        del "${TOMCAT_WEBAPPS}\\${APP_NAME}.war"
-                    )
-
-                    if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}" (
-                        echo "Removing old application directory..."
-                        rmdir /s /q "${TOMCAT_WEBAPPS}\\${APP_NAME}"
-                        echo "✅ Old application files removed"
-                    )
-
-                    echo "Step 2: Deploying new WAR file..."
-                    copy target\\*.war "${TOMCAT_WEBAPPS}\\${APP_NAME}.war"
-                    echo "✅ New WAR file deployed successfully"
-
-                    echo "Step 3: Setting file permissions (if needed)..."
-                    rem Grant full control to Tomcat service account if needed
-                    icacls "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" /grant "Everyone:(F)" /T 2>nul || echo "Permission setting skipped"
-                """
+            when {
+                expression { env.TOMCAT_RUNNING == 'true' }
             }
-        }
-
-        stage('Start Tomcat') {
             steps {
                 script {
-                    echo "=== Starting Tomcat Service ==="
+                    echo "=== Stopping Tomcat ==="
 
                     withCredentials([usernamePassword(
                         credentialsId: 'tomcat-admin-creds',
                         usernameVariable: 'ADMIN_USER',
                         passwordVariable: 'ADMIN_PASS'
                     )]) {
-                        bat """
-                            powershell -Command "\$securePass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force; \
-                            \$credential = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$securePass); \
-                            Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','net start ${TOMCAT_SERVICE}' -Credential \$credential -NoNewWindow -Wait"
-                        """
+                        def stopStatus = bat(
+                            script: """
+                                powershell -Command "\$secpass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force;
+                                \$cred = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$secpass);
+                                Start-Process cmd -Credential \$cred -ArgumentList '/c','net stop ${TOMCAT_SERVICE}' -Wait -NoNewWindow"
+                            """,
+                            returnStatus: true
+                        )
 
-                        // Verify service started
-                        def status = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
-                        if(status.contains("RUNNING")) {
-                            echo "✅ Tomcat service confirmed running"
+                        if(stopStatus == 0) {
+                            env.TOMCAT_STOP_METHOD = 'service_stop'
+                            echo "✅ Tomcat stopped successfully"
                         } else {
-                            error("❌ Failed to start Tomcat service")
+                            error("❌ Failed to stop Tomcat")
                         }
                     }
                 }
             }
         }
 
-        stage('Post-Deployment Verification'){
-            steps{
-                script{
-                    echo "=== Post-Deployment Verification ==="
+        stage('Deploy Application') {
+            steps {
+                script {
+                    echo "=== Deploying Application ==="
 
-                    try {
-                        // Check Tomcat service status
-                        bat """
-                            echo "Checking Tomcat service status..."
-                            sc query ${TOMCAT_SERVICE} | findstr "RUNNING" || (echo "⚠️  Tomcat service is not running" && exit 1)
-                            echo "✅ Tomcat service is running"
-                        """
+                    bat """
+                        @echo off
+                        setlocal
 
-                        // Check if application was deployed (directory exists)
-                        bat """
-                            echo "Checking application deployment..."
-                            if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}" (
-                                echo "✅ Application directory exists"
-                                echo "Application files:"
-                                dir "${TOMCAT_WEBAPPS}\\${APP_NAME}" /W
-                            ) else (
-                                echo "⚠️  Application directory not found - deployment may be in progress"
-                            )
-                        """
+                        echo Removing old deployment...
+                        if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" del /q "${TOMCAT_WEBAPPS}\\${APP_NAME}.war"
+                        if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}" rmdir /s /q "${TOMCAT_WEBAPPS}\\${APP_NAME}"
 
-                        // Test API endpoints
-                        def endpoints = [
-                            "http://localhost:8092/student/",
-                            "http://localhost:8092/student/api/",
-                            "http://localhost:8080/student/",
-                            "http://localhost:8080/student/api/"
-                        ]
+                        echo Deploying new WAR...
+                        copy /y "target\\*.war" "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" || exit /b 1
 
-                        def workingEndpoint = null
-                        echo "Testing API endpoints..."
+                        echo Setting permissions...
+                        icacls "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" /grant "Everyone:(F)" >nul 2>&1
+                    """
+                }
+            }
+        }
 
-                        for (endpoint in endpoints) {
-                            echo "Testing: ${endpoint}"
-                            def result = bat(script: "curl -s -o nul -w \"%{http_code}\" --connect-timeout 10 \"${endpoint}\"", returnStdout: true).trim()
+        stage('Start Tomcat') {
+            when {
+                expression { env.TOMCAT_RUNNING == 'true' }
+            }
+            steps {
+                script {
+                    echo "=== Starting Tomcat ==="
 
-                            if (result == "200") {
-                                echo "✅ ${endpoint} - HTTP 200 (SUCCESS)"
-                                workingEndpoint = endpoint
-                                break
-                            } else if (result == "404") {
-                                echo "❌ ${endpoint} - HTTP 404 (Not Found)"
-                            } else if (result == "000") {
-                                echo "❌ ${endpoint} - Connection failed"
-                            } else {
-                                echo "⚠️  ${endpoint} - HTTP ${result}"
-                            }
-                        }
+                    withCredentials([usernamePassword(
+                        credentialsId: 'tomcat-admin-creds',
+                        usernameVariable: 'ADMIN_USER',
+                        passwordVariable: 'ADMIN_PASS'
+                    )]) {
+                        def startStatus = bat(
+                            script: """
+                                powershell -Command "\$secpass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force;
+                                \$cred = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$secpass);
+                                Start-Process cmd -Credential \$cred -ArgumentList '/c','net start ${TOMCAT_SERVICE}' -Wait -NoNewWindow"
+                            """,
+                            returnStatus: true
+                        )
 
-                        if (workingEndpoint) {
-                            echo "🎉 DEPLOYMENT SUCCESSFUL!"
-                            echo "✅ Working endpoint found: ${workingEndpoint}"
-                            currentBuild.result = 'SUCCESS'
+                        if(startStatus == 0) {
+                            env.TOMCAT_START_SUCCESS = 'true'
+                            echo "✅ Tomcat started successfully"
+
+                            // Wait for deployment to complete
+                            bat 'timeout /t 30 >nul'
                         } else {
-                            echo "⚠️  No working endpoints found - application may still be starting"
-                            currentBuild.result = 'UNSTABLE'
+                            env.TOMCAT_START_SUCCESS = 'false'
+                            error("❌ Failed to start Tomcat")
                         }
+                    }
+                }
+            }
+        }
 
-                    } catch (Exception e) {
-                        echo "Verification encountered issues: ${e.getMessage()}"
+        stage('Verify Deployment') {
+            steps {
+                script {
+                    echo "=== Verifying Deployment ==="
+
+                    // Check files were deployed
+                    bat """
+                        if not exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" (
+                            echo ❌ WAR file not deployed
+                            exit 1
+                        )
+                        echo ✅ WAR file deployed
+                    """
+
+                    // Test application endpoints
+                    def endpoints = ["http://localhost:8080/${APP_NAME}/api/health"]
+                    def healthy = false
+
+                    for(endpoint in endpoints) {
+                        def status = bat(
+                            script: "curl -s -o nul -w \"%{http_code}\" --connect-timeout 10 \"${endpoint}\"",
+                            returnStdout: true
+                        ).trim()
+
+                        if(status == "200") {
+                            healthy = true
+                            echo "✅ Endpoint ${endpoint} is healthy (HTTP 200)"
+                            break
+                        }
+                    }
+
+                    if(!healthy) {
+                        echo "⚠️ No healthy endpoints found - application may still be starting"
                         currentBuild.result = 'UNSTABLE'
                     }
                 }
@@ -329,42 +245,33 @@ pipeline{
         }
     }
 
-    post{
-        always{
-            script{
-                echo "=== DEPLOYMENT SUMMARY ==="
-                echo "Backup location: ${env.BACKUP_FILE ?: 'No backup created'}"
-                echo "Backup directory: ${BACKUP_DIR}"
-                echo "Tomcat stop method: ${env.TOMCAT_STOP_METHOD ?: 'Not stopped'}"
-                echo "Tomcat start success: ${env.TOMCAT_START_SUCCESS ?: 'Unknown'}"
-            }
-            echo "=== CLEANING UP WORKSPACE ==="
+    post {
+        always {
+            echo "=== Cleaning Workspace ==="
             deleteDir()
+
+            // Final status report
+            echo """
+            === Deployment Summary ===
+            Backup Location: ${env.BACKUP_FILE ?: 'N/A'}
+            Tomcat Status: ${env.TOMCAT_RUNNING == 'true' ? 'Was running' : 'Was stopped'}
+            Stop Method: ${env.TOMCAT_STOP_METHOD}
+            Start Success: ${env.TOMCAT_START_SUCCESS ?: 'N/A'}
+            """
         }
-        success{
-            echo "🎉 === BUILD AND DEPLOYMENT SUCCESSFUL ==="
-            echo "✅ Student application deployed successfully"
-            echo "📁 Backup stored at: ${env.BACKUP_FILE}"
-            echo "🌐 Application should be accessible soon"
+        success {
+            echo "🎉 Deployment completed successfully!"
         }
-        unstable{
-            echo "⚠️  === DEPLOYMENT COMPLETED WITH WARNINGS ==="
-            echo "📁 Backup available at: ${env.BACKUP_FILE}"
-            echo "🔧 Manual verification may be required"
-            echo "Check Tomcat logs and application endpoints manually"
+        unstable {
+            echo "⚠️ Deployment completed with warnings"
         }
-        failure{
-            echo "❌ === DEPLOYMENT FAILED ==="
-            echo "🔄 ROLLBACK OPTIONS:"
-            echo "1. Restore from backup: ${env.BACKUP_FILE}"
-            echo "2. Manual rollback command:"
-            echo "   copy \"${env.BACKUP_FILE}\" \"${TOMCAT_WEBAPPS}\\${APP_NAME}.war\""
-            echo ""
-            echo "🔧 ADMIN PRIVILEGE SOLUTIONS:"
-            echo "1. Run Jenkins service as Administrator"
-            echo "2. Use 'Run as Administrator' for Jenkins"
-            echo "3. Configure Jenkins to run with admin privileges"
-            echo "4. Manual Tomcat control via Services.msc"
+        failure {
+            echo """
+            ❌ Deployment failed
+            Rollback Options:
+            1. Restore backup: copy "${env.BACKUP_FILE}" "${TOMCAT_WEBAPPS}\\${APP_NAME}.war"
+            2. Check Tomcat logs: type "%CATALINA_HOME%\\logs\\catalina.out"
+            """
         }
     }
 }
