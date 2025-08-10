@@ -10,22 +10,44 @@ pipeline {
     }
 
     stages {
-        stage('Verify DNS Resolution') {
+        stage('Verify Connectivity') {
             steps {
                 script {
-                    echo "=== Verifying DNS Resolution for Maven Central ==="
+                    echo "=== Verifying Maven Central Connectivity ==="
 
-                    // First verify basic DNS resolution
+                    // 1. DNS Resolution Check
                     def dnsCheck = bat(
                         script: "nslookup ${MAVEN_REPO_URL}",
                         returnStatus: true
                     )
 
                     if (dnsCheck != 0) {
-                        error "DNS resolution failed for ${MAVEN_REPO_URL}"
+                        error "❌ DNS resolution failed for ${MAVEN_REPO_URL}"
                     }
-
                     echo "✅ DNS resolution verified for ${MAVEN_REPO_URL}"
+
+                    // 2. HTTP Connectivity Check using PowerShell
+                    def httpStatus = powershell(
+                        script: """
+                            try {
+                                \$response = Invoke-WebRequest -Uri "https://${MAVEN_REPO_URL}/maven2/" -Method Head -UseBasicParsing -TimeoutSec 10
+                                Write-Output \$response.StatusCode
+                            } catch {
+                                Write-Output \$_.Exception.Response.StatusCode.Value__
+                            }
+                        """,
+                        returnStdout: true
+                    ).trim()
+
+                    echo "Maven Central connectivity check returned HTTP ${httpStatus}"
+
+                    if (httpStatus == "200") {
+                        env.MAVEN_ONLINE = true
+                        echo "✅ Maven Central is accessible"
+                    } else {
+                        env.MAVEN_ONLINE = false
+                        echo "⚠️ Maven Central not accessible (HTTP ${httpStatus}) - will use offline mode"
+                    }
                 }
             }
         }
