@@ -21,28 +21,27 @@ pipeline {
         stage('Deploy to Tomcat') {
             steps {
                 script {
-                    def tomcatWebapps = '"C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps"'
+                    def tomcatWebapps = "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps"
                     def backupDir = "${tomcatWebapps}\\backup"
                     def warName = "student.war"
-                    def warSource = "\"${env.WORKSPACE}\\target\\${warName}\""
+                    def warSource = "${env.WORKSPACE}\\target\\${warName}"
                     def warDest = "${tomcatWebapps}\\${warName}"
 
-                    // Create backup directory
-                    bat "mkdir ${backupDir}"
+                    // Create backup directory (ignore error if it exists)
+                    bat "if not exist \"${backupDir}\" mkdir \"${backupDir}\""
 
-                    // Backup existing WAR
+                    // Backup and replace WAR
                     bat """
-                        if exist ${warDest} (
-                            copy ${warDest} ${backupDir}\\${warName}_backup_%DATE:~10,4%-%DATE:~4,2%-%DATE:~7,2%_%TIME:~0,2%-%TIME:~3,2%-%TIME:~6,2%.war
-                            del ${warDest}
+                        if exist \"${warDest}\" (
+                            copy \"${warDest}\" \"${backupDir}\\${warName}_backup_%DATE:~10,4%-%DATE:~4,2%-%DATE:~7,2%_%TIME:~0,2%-%TIME:~3,2%-%TIME:~6,2%.war\"
+                            del /Q \"${warDest}\"
                         )
+                        copy \"${warSource}\" \"${warDest}\"
                     """
-
-                    // Copy new WAR to Tomcat
-                    bat "copy ${warSource} ${warDest}"
                 }
             }
         }
+
 
 
 
