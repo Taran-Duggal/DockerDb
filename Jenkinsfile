@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
     environment {
@@ -5,33 +6,69 @@ pipeline {
         TOMCAT_WEBAPPS = 'C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps'
         TOMCAT_SERVICE = 'Tomcat10'
         APP_NAME = 'student'
-        TOMCAT_STOP_METHOD = 'not_needed' // Default value
+        MAVEN_REPO_URL = 'repo.maven.apache.org'
     }
 
     stages {
+        stage('Verify DNS Resolution') {
+            steps {
+                script {
+                    echo "=== Verifying DNS Resolution for Maven Central ==="
+
+                    // First verify basic DNS resolution
+                    def dnsCheck = bat(
+                        script: "nslookup ${MAVEN_REPO_URL}",
+                        returnStatus: true
+                    )
+
+                    if (dnsCheck != 0) {
+                        error "DNS resolution failed for ${MAVEN_REPO_URL}"
+                    }
+
+                    echo "✅ DNS resolution verified for ${MAVEN_REPO_URL}"
+                }
+            }
+        }
+
         stage('Build') {
             steps {
                 script {
                     echo "=== Starting Maven Build ==="
 
-                    // Test Maven Central connectivity with timeout
+                    // Test connectivity with timeout and proper URL
                     def httpCode = bat(
-                        script: 'curl -s -o nul -w "%{http_code}" --connect-timeout 10 https://repo.maven.apache.org/maven2/',
+                        script: """
+                            curl -s -o nul -w "%{http_code}" --connect-timeout 10 \
+                            "https://${MAVEN_REPO_URL}/maven2/"
+                        """,
                         returnStdout: true
                     ).trim()
 
-                    if(httpCode == "200") {
-                        echo "Maven Central accessible (HTTP ${httpCode}) - proceeding with build"
-                        bat 'mvn clean package -DskipTests=true'
-                    } else {
-                        echo "Maven Central connection issue (HTTP ${httpCode}) - trying offline build"
-                        bat 'mvn clean package -DskipTests=true -o'
+                    echo "Maven Central connectivity check returned HTTP ${httpCode}"
+
+                    try {
+                        if (httpCode == "200") {
+                            echo "Maven Central accessible - proceeding with online build"
+                            bat 'mvn clean package -DskipTests=true'
+                        } else {
+                            echo "HTTP ${httpCode} received - falling back to offline build"
+                            bat 'mvn clean package -DskipTests=true -o'
+                        }
+                    } catch (Exception e) {
+                        echo "Build failed with exception: ${e.getMessage()}"
+                        echo "Attempting with local repository only"
+                        bat 'mvn clean package -DskipTests=true -o -Dmaven.repo.local=repository'
                     }
                 }
             }
             post {
                 success {
                     archiveArtifacts artifacts: '**/target/*.war', fingerprint: true
+                    echo "Build artifacts archived successfully"
+                }
+                failure {
+                    echo "Build failed - check Maven configuration and network connectivity"
+                    echo "Verify hosts file contains correct entry for ${MAVEN_REPO_URL}"
                 }
             }
         }
@@ -41,7 +78,7 @@ pipeline {
                 script {
                     echo "=== Pre-Deployment Checks ==="
 
-                    // Create backup directory with error handling
+                    // Create backup directory
                     bat """
                         if not exist "${BACKUP_DIR}" (
                             mkdir "${BACKUP_DIR}" || exit /b 1
@@ -63,7 +100,7 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    if(serviceStatus.contains("RUNNING")) {
+                    if (serviceStatus.contains("RUNNING")) {
                         env.TOMCAT_RUNNING = 'true'
                         echo "⚠️ Tomcat running - will attempt to stop"
                     } else {
@@ -102,45 +139,7 @@ pipeline {
                             echo Fresh deployment detected
                             echo FRESH_DEPLOYMENT > "${BACKUP_DIR}\\deployment_type_${timestamp}.txt"
                         )
-
-                        echo Cleaning old backups...
-                        for /f "skip=5 delims=" %%i in ('dir /b /o-d "${BACKUP_DIR}\\${APP_NAME}.war.backup.*" 2^>nul') do (
-                            del "${BACKUP_DIR}\\%%i"
-                        )
                     """
-                }
-            }
-        }
-
-        stage('Stop Tomcat') {
-            when {
-                expression { env.TOMCAT_RUNNING == 'true' }
-            }
-            steps {
-                script {
-                    echo "=== Stopping Tomcat ==="
-
-                    withCredentials([usernamePassword(
-                        credentialsId: 'tomcat-admin-creds',
-                        usernameVariable: 'ADMIN_USER',
-                        passwordVariable: 'ADMIN_PASS'
-                    )]) {
-                        def stopStatus = bat(
-                            script: """
-                                powershell -Command "\$secpass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force;
-                                \$cred = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$secpass);
-                                Start-Process cmd -Credential \$cred -ArgumentList '/c','net stop ${TOMCAT_SERVICE}' -Wait -NoNewWindow"
-                            """,
-                            returnStatus: true
-                        )
-
-                        if(stopStatus == 0) {
-                            env.TOMCAT_STOP_METHOD = 'service_stop'
-                            echo "✅ Tomcat stopped successfully"
-                        } else {
-                            error("❌ Failed to stop Tomcat")
-                        }
-                    }
                 }
             }
         }
@@ -168,43 +167,6 @@ pipeline {
             }
         }
 
-        stage('Start Tomcat') {
-            when {
-                expression { env.TOMCAT_RUNNING == 'true' }
-            }
-            steps {
-                script {
-                    echo "=== Starting Tomcat ==="
-
-                    withCredentials([usernamePassword(
-                        credentialsId: 'tomcat-admin-creds',
-                        usernameVariable: 'ADMIN_USER',
-                        passwordVariable: 'ADMIN_PASS'
-                    )]) {
-                        def startStatus = bat(
-                            script: """
-                                powershell -Command "\$secpass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force;
-                                \$cred = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$secpass);
-                                Start-Process cmd -Credential \$cred -ArgumentList '/c','net start ${TOMCAT_SERVICE}' -Wait -NoNewWindow"
-                            """,
-                            returnStatus: true
-                        )
-
-                        if(startStatus == 0) {
-                            env.TOMCAT_START_SUCCESS = 'true'
-                            echo "✅ Tomcat started successfully"
-
-                            // Wait for deployment to complete
-                            bat 'timeout /t 30 >nul'
-                        } else {
-                            env.TOMCAT_START_SUCCESS = 'false'
-                            error("❌ Failed to start Tomcat")
-                        }
-                    }
-                }
-            }
-        }
-
         stage('Verify Deployment') {
             steps {
                 script {
@@ -219,24 +181,33 @@ pipeline {
                         echo ✅ WAR file deployed
                     """
 
-                    // Test application endpoints
-                    def endpoints = ["http://localhost:8080/${APP_NAME}/api/health"]
+                    // Test application health endpoint
                     def healthy = false
+                    def endpoints = [
+                        "http://localhost:8080/${APP_NAME}/api/health",
+                        "http://localhost:8080/${APP_NAME}/health"
+                    ]
 
-                    for(endpoint in endpoints) {
-                        def status = bat(
-                            script: "curl -s -o nul -w \"%{http_code}\" --connect-timeout 10 \"${endpoint}\"",
-                            returnStdout: true
-                        ).trim()
+                    for (endpoint in endpoints) {
+                        try {
+                            def status = bat(
+                                script: """
+                                    curl -s -o nul -w "%{http_code}" --connect-timeout 10 "${endpoint}"
+                                """,
+                                returnStdout: true
+                            ).trim()
 
-                        if(status == "200") {
-                            healthy = true
-                            echo "✅ Endpoint ${endpoint} is healthy (HTTP 200)"
-                            break
+                            if (status == "200") {
+                                healthy = true
+                                echo "✅ Endpoint ${endpoint} is healthy (HTTP 200)"
+                                break
+                            }
+                        } catch (Exception e) {
+                            echo "⚠️ Failed to check ${endpoint}: ${e.getMessage()}"
                         }
                     }
 
-                    if(!healthy) {
+                    if (!healthy) {
                         echo "⚠️ No healthy endpoints found - application may still be starting"
                         currentBuild.result = 'UNSTABLE'
                     }
@@ -255,22 +226,24 @@ pipeline {
             === Deployment Summary ===
             Backup Location: ${env.BACKUP_FILE ?: 'N/A'}
             Tomcat Status: ${env.TOMCAT_RUNNING == 'true' ? 'Was running' : 'Was stopped'}
-            Stop Method: ${env.TOMCAT_STOP_METHOD}
-            Start Success: ${env.TOMCAT_START_SUCCESS ?: 'N/A'}
+            Build Source: ${currentBuild.result == 'SUCCESS' ? 'Online' : 'Offline'}
             """
         }
         success {
-            echo "🎉 Deployment completed successfully!"
+            echo "🎉 Pipeline completed successfully!"
         }
         unstable {
-            echo "⚠️ Deployment completed with warnings"
+            echo "⚠️ Pipeline completed with warnings"
+            echo "Application may still be starting - check Tomcat logs if endpoints aren't responding"
         }
         failure {
             echo """
-            ❌ Deployment failed
-            Rollback Options:
-            1. Restore backup: copy "${env.BACKUP_FILE}" "${TOMCAT_WEBAPPS}\\${APP_NAME}.war"
-            2. Check Tomcat logs: type "%CATALINA_HOME%\\logs\\catalina.out"
+            ❌ Pipeline failed
+            Troubleshooting Steps:
+            1. Verify DNS resolution for ${MAVEN_REPO_URL}
+            2. Check Maven build logs for errors
+            3. Verify Tomcat service account has write permissions to ${TOMCAT_WEBAPPS}
+            4. Check Jenkins agent connectivity
             """
         }
     }
