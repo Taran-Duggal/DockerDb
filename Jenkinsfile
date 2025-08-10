@@ -15,7 +15,7 @@ pipeline {
                 script {
                     echo "=== Verifying Maven Central Connectivity ==="
 
-                    // 1. DNS Resolution Check
+                    // DNS Resolution Check
                     def dnsCheck = bat(
                         script: "nslookup ${MAVEN_REPO_URL}",
                         returnStatus: true
@@ -26,7 +26,7 @@ pipeline {
                     }
                     echo "✅ DNS resolution verified for ${MAVEN_REPO_URL}"
 
-                    // 2. HTTP Connectivity Check using PowerShell
+                    // HTTP Connectivity Check using PowerShell
                     def httpStatus = powershell(
                         script: """
                             try {
@@ -57,40 +57,27 @@ pipeline {
                 script {
                     echo "=== Starting Maven Build ==="
 
-                    // Test connectivity with timeout and proper URL
-                    def httpCode = bat(
-                        script: """
-                            curl -s -o nul -w "%{http_code}" --connect-timeout 10 \
-                            "https://${MAVEN_REPO_URL}/maven2/"
-                        """,
-                        returnStdout: true
-                    ).trim()
-
-                    echo "Maven Central connectivity check returned HTTP ${httpCode}"
+                    // Remove the problematic curl command
+                    // Add Maven version check for debugging
+                    bat 'mvn --version'
 
                     try {
-                        if (httpCode == "200") {
-                            echo "Maven Central accessible - proceeding with online build"
+                        if (env.MAVEN_ONLINE == "true") {
                             bat 'mvn clean package -DskipTests=true'
                         } else {
-                            echo "HTTP ${httpCode} received - falling back to offline build"
                             bat 'mvn clean package -DskipTests=true -o'
                         }
                     } catch (Exception e) {
-                        echo "Build failed with exception: ${e.getMessage()}"
-                        echo "Attempting with local repository only"
-                        bat 'mvn clean package -DskipTests=true -o -Dmaven.repo.local=repository'
+                        error "❌ Build failed: ${e.getMessage()}"
                     }
                 }
             }
             post {
-                success {
-                    archiveArtifacts artifacts: '**/target/*.war', fingerprint: true
-                    echo "Build artifacts archived successfully"
-                }
                 failure {
-                    echo "Build failed - check Maven configuration and network connectivity"
-                    echo "Verify hosts file contains correct entry for ${MAVEN_REPO_URL}"
+                    echo "❌ Build failed - checking possible causes..."
+                    bat 'where mvn'
+                    bat 'echo %PATH%'
+                    bat 'echo %MAVEN_HOME%'
                 }
             }
         }
