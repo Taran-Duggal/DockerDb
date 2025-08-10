@@ -21,19 +21,22 @@ pipeline {
         stage('Deploy to Tomcat') {
             steps {
                 script {
-                    def tomcatWebapps = "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps"
-                    def backupDir = "${tomcatWebapps}\\backup"
+                    def tomcatBase = "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1"
                     def warName = "student.war"
                     def warSource = "${env.WORKSPACE}\\target\\${warName}"
-                    def warDest = "${tomcatWebapps}\\${warName}"
+                    def warDest = "${tomcatBase}\\webapps\\${warName}"
 
-                    // Create backup directory (ignore error if it exists)
-                    bat "if not exist \"${backupDir}\" mkdir \"${backupDir}\""
+                    // Generate timestamp for backup folder
+                    def timestamp = new Date().format("yyyy-MM-dd_HH-mm-ss")
+                    def backupDir = "${tomcatBase}\\backup-${timestamp}"
+
+                    // Create backup directory
+                    bat "mkdir \"${backupDir}\""
 
                     // Backup and replace WAR
                     bat """
                         if exist \"${warDest}\" (
-                            copy \"${warDest}\" \"${backupDir}\\${warName}_backup_%DATE:~10,4%-%DATE:~4,2%-%DATE:~7,2%_%TIME:~0,2%-%TIME:~3,2%-%TIME:~6,2%.war\"
+                            copy \"${warDest}\" \"${backupDir}\\${warName}\"
                             del /Q \"${warDest}\"
                         )
                         copy \"${warSource}\" \"${warDest}\"
@@ -41,6 +44,7 @@ pipeline {
                 }
             }
         }
+
 
 
 
