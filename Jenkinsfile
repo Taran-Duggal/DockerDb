@@ -134,35 +134,38 @@ pipeline{
                     echo "=== Creating Application Backup ==="
 
                     // Generate timestamp for backup
-                    def timestamp = bat(script: 'powershell -Command "Get-Date -Format \'yyyyMMdd_HHmmss\'"', returnStdout: true).trim()
+                    def timestamp = bat(script: '@powershell -Command "(Get-Date).ToString(\'yyyyMMdd_HHmmss\')"', returnStdout: true).trim()
                     env.BACKUP_TIMESTAMP = timestamp
                     env.BACKUP_FILE = "${BACKUP_DIR}\\${APP_NAME}.war.backup.${timestamp}"
 
+                    // Create backup with proper escaping
                     bat """
-                        echo "Backup timestamp: ${timestamp}"
-                        echo "Backup location: ${env.BACKUP_FILE}"
+                        @echo off
+                        set TIMESTAMP=${timestamp}
+                        set BACKUP_FILE=${env.BACKUP_FILE}
+
+                        echo Backup timestamp: %TIMESTAMP%
+                        echo Backup location: %BACKUP_FILE%
 
                         if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" (
-                            echo "📦 Creating backup of existing WAR file..."
-                            copy "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" "${env.BACKUP_FILE}"
-                            echo "✅ Backup created successfully: ${env.BACKUP_FILE}"
+                            echo Creating backup of existing WAR file...
+                            copy "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" "%BACKUP_FILE%"
+                            echo Backup created successfully: %BACKUP_FILE%
 
-                            rem Also backup the expanded directory if it exists
                             if exist "${TOMCAT_WEBAPPS}\\${APP_NAME}" (
-                                echo "📦 Creating backup of application directory..."
-                                xcopy "${TOMCAT_WEBAPPS}\\${APP_NAME}" "${BACKUP_DIR}\\${APP_NAME}_${timestamp}" /E /I /H /Y
-                                echo "✅ Application directory backed up"
+                                echo Creating backup of application directory...
+                                xcopy "${TOMCAT_WEBAPPS}\\${APP_NAME}" "${BACKUP_DIR}\\${APP_NAME}_%TIMESTAMP%" /E /I /H /Y
+                                echo Application directory backed up
                             )
                         ) else (
-                            echo "ℹ️  No existing WAR file found - fresh deployment"
-                            echo "FRESH_DEPLOYMENT" > "${BACKUP_DIR}\\deployment_type_${timestamp}.txt"
+                            echo No existing WAR file found - fresh deployment
+                            echo FRESH_DEPLOYMENT > "${BACKUP_DIR}\\deployment_type_%TIMESTAMP%.txt"
                         )
 
-                        rem Clean old backups (keep last 5)
-                        echo "🧹 Cleaning old backups (keeping last 5)..."
-                        for /f "skip=5 tokens=*" %%i in ('dir /b /od "${BACKUP_DIR}\\${APP_NAME}.war.backup.*" 2^>nul') do (
-                            del "${BACKUP_DIR}\\%%i" 2>nul
-                            echo "Removed old backup: %%i"
+                        echo Cleaning old backups (keeping last 5)...
+                        for /f "skip=5 delims=" %%i in ('dir /b /o-d "${BACKUP_DIR}\\${APP_NAME}.war.backup.*" 2^>nul') do (
+                            del "${BACKUP_DIR}\\%%i"
+                            echo Removed old backup: %%i
                         )
                     """
                 }
