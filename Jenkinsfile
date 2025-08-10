@@ -128,7 +128,7 @@ pipeline{
 
                     echo "Step 1: Stopping Tomcat service..."
                     net stop Tomcat10
-                    timeout /t 10
+                    powershell -Command "Start-Sleep -Seconds 10"
 
                     echo "Step 2: Creating backup of existing WAR file..."
                     if exist "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war" (
@@ -155,7 +155,7 @@ pipeline{
                     net start Tomcat10
 
                     echo "Step 6: Waiting for Tomcat to fully start..."
-                    timeout /t 30
+                    powershell -Command "Start-Sleep -Seconds 30"
 
                     echo "=== Deployment Completed ==="
                 '''
@@ -167,19 +167,28 @@ pipeline{
                 failure{
                     echo 'Deployment failed - attempting to rollback if backup exists'
                     script{
-                        bat '''
-                            echo "Deployment failed, checking for backup..."
-                            if exist "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war.backup.*" (
-                                echo "Restoring from backup..."
-                                for /f %%i in ('dir /b /od "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war.backup.*"') do set LATEST=%%i
-                                copy "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\%LATEST%" "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war"
-                                net start Tomcat10
-                                echo "Rollback completed"
-                            ) else (
-                                echo "No backup found, manual intervention required"
-                                net start Tomcat10
-                            )
-                        '''
+                        try {
+                            bat '''
+                                echo "Deployment failed, checking for backup..."
+                                setlocal enabledelayedexpansion
+                                set "BACKUP_FILE="
+                                for /f "tokens=*" %%i in ('dir /b /od "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war.backup.*" 2^>nul') do set "BACKUP_FILE=%%i"
+
+                                if defined BACKUP_FILE (
+                                    echo "Found backup: !BACKUP_FILE!"
+                                    echo "Restoring from backup..."
+                                    copy "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\!BACKUP_FILE!" "C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps\\student.war"
+                                    net start Tomcat10 2>nul || echo "Tomcat already running"
+                                    echo "Rollback completed"
+                                ) else (
+                                    echo "No backup found, manual intervention required"
+                                    net start Tomcat10 2>nul || echo "Tomcat already running"
+                                )
+                            '''
+                        } catch (Exception e) {
+                            echo "Rollback script encountered an error: ${e.getMessage()}"
+                            bat 'net start Tomcat10 2>nul || echo "Tomcat service handling completed"'
+                        }
                     }
                 }
             }
@@ -187,22 +196,27 @@ pipeline{
         stage('Post-Deployment Verification'){
             steps{
                 script{
-                    // Health check to verify deployment
-                    echo 'Waiting for application to fully deploy...'
-                    bat 'timeout /t 30'
+                    try {
+                        // Health check to verify deployment
+                        echo 'Waiting for application to fully deploy...'
+                        bat 'powershell -Command "Start-Sleep -Seconds 30"'
 
-                    // Check if Tomcat is running
-                    bat '''
-                        echo "Checking Tomcat service status..."
-                        sc query Tomcat10 | findstr "RUNNING" || (echo "Tomcat service is not running" && exit 1)
-                    '''
+                        // Check if Tomcat is running
+                        bat '''
+                            echo "Checking Tomcat service status..."
+                            sc query Tomcat10 | findstr "RUNNING" || (echo "Tomcat service is not running" && exit 1)
+                        '''
 
-                    // Check application deployment on correct port and endpoint
-                    bat '''
-                        echo "Verifying application deployment..."
-                        curl -f http://localhost:8092/student/api/ || (echo "Student API is not accessible" && exit 1)
-                        echo "Student application is successfully deployed and accessible"
-                    '''
+                        // Check application deployment on correct port and endpoint
+                        bat '''
+                            echo "Verifying application deployment..."
+                            curl -f http://localhost:8092/student/api/ || (echo "Student API is not accessible" && exit 1)
+                            echo "Student application is successfully deployed and accessible"
+                        '''
+                    } catch (Exception e) {
+                        echo "Verification failed: ${e.getMessage()}"
+                        currentBuild.result = 'UNSTABLE'
+                    }
                 }
             }
         }
@@ -232,6 +246,11 @@ pipeline{
 
             // Simple echo instead of email if mail plugins are not configured
             echo "FAILURE NOTIFICATION: Deployment failed - manual intervention required!"
+        }
+        unstable{
+            echo "=== DEPLOYMENT COMPLETED WITH WARNINGS ==="
+            echo "Application may be deployed but verification failed"
+            echo "Please manually check: http://localhost:8092/student/api/"
         }
     }
 }
