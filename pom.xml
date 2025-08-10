@@ -11,7 +11,7 @@
 	<groupId>com.dockerwithDb</groupId>
 	<artifactId>DockerDb</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-<!--	<packaging>war</packaging>-->
+	<packaging>war</packaging>
 	<name>DockerDb</name>
 	<description>Demo project for Spring Boot</description>
 	<url/>
@@ -59,6 +59,11 @@
 			<scope>test</scope>
 		</dependency>
 
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-tomcat</artifactId>
+			<scope>provided</scope>
+		</dependency>
 		<dependency>
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
