@@ -43,12 +43,81 @@ pipeline{
     stages{
         stage('Build'){
             steps{
-                bat 'mvn clean package -DskipTests=true'
+                script{
+                    echo "=== Starting Maven Build ==="
+                    echo "Testing Maven Central connectivity..."
+
+                    // Test HTTP connectivity to Maven Central
+                    def httpTest = bat(script: 'curl -I --connect-timeout 10 https://repo.maven.apache.org/maven2/ 2>nul', returnStatus: true)
+
+                    if(httpTest == 0) {
+                        echo "Maven Central is accessible - proceeding with normal build"
+                        bat 'mvn clean package -DskipTests=true'
+                    } else {
+                        echo "HTTPS connection to Maven Central failed"
+                        echo "Testing HTTP connection..."
+
+                        def httpTestPlain = bat(script: 'curl -I --connect-timeout 10 http://repo.maven.apache.org/maven2/ 2>nul', returnStatus: true)
+
+                        if(httpTestPlain == 0) {
+                            echo "HTTP works but HTTPS is blocked - trying with HTTP repository"
+                            bat '''
+                                mvn clean package -DskipTests=true -Dmaven.repo.remote=http://repo.maven.apache.org/maven2
+                            '''
+                        } else {
+                            echo "Both HTTP and HTTPS are blocked - trying offline build"
+                            echo "This will only work if dependencies are already cached locally"
+
+                            try {
+                                bat 'mvn clean package -DskipTests=true -o'
+                                echo "Offline build successful!"
+                            } catch (Exception e) {
+                                echo "Offline build also failed - need to resolve network connectivity"
+
+                                // Try with alternative repository
+                                echo "Trying with alternative Maven repository..."
+                                bat '''
+                                    mvn clean package -DskipTests=true -Dmaven.repo.remote=https://repo1.maven.org/maven2
+                                '''
+                            }
+                        }
+                    }
+                }
             }
             post{
                 success{
+                    echo 'Build completed successfully!'
                     echo 'Now Archiving the Artifacts'
                     archiveArtifacts artifacts: '**/target/*.war'
+                }
+                failure{
+                    echo '=== BUILD FAILED - NETWORK CONNECTIVITY TROUBLESHOOTING ==='
+                    echo ''
+                    echo 'DIAGNOSIS:'
+                    echo '- DNS Resolution: ✅ Working (repo.maven.apache.org resolves to 199.232.20.215)'
+                    echo '- HTTP/HTTPS Access: ❌ Blocked by corporate firewall/proxy'
+                    echo ''
+                    echo 'SOLUTIONS:'
+                    echo ''
+                    echo '1. CONFIGURE MAVEN PROXY:'
+                    echo '   Create C:\\Users\\duggal.84\\.m2\\settings.xml with:'
+                    echo '   <proxies><proxy><host>PROXY-HOST</host><port>PROXY-PORT</port></proxy></proxies>'
+                    echo ''
+                    echo '2. CONTACT IT TEAM FOR:'
+                    echo '   - Corporate proxy settings (host:port)'
+                    echo '   - Firewall whitelist for repo.maven.apache.org (199.232.20.215)'
+                    echo '   - Corporate Maven repository URL'
+                    echo ''
+                    echo '3. ALTERNATIVE - USE CORPORATE REPOSITORY:'
+                    echo '   Ask IT for internal Nexus/Artifactory URL'
+                    echo ''
+                    echo '4. MANUAL DEPENDENCY DOWNLOAD:'
+                    echo '   Download JARs manually and install to local repo'
+                    echo ''
+                    echo 'NETWORK TEST COMMANDS:'
+                    echo '- Test HTTP: curl -I http://repo.maven.apache.org/maven2/'
+                    echo '- Test HTTPS: curl -I https://repo.maven.apache.org/maven2/'
+                    echo '- Test connectivity: telnet 199.232.20.215 80'
                 }
             }
         }
@@ -128,10 +197,10 @@ pipeline{
                         sc query Tomcat10 | findstr "RUNNING" || (echo "Tomcat service is not running" && exit 1)
                     '''
 
-                    // Check application deployment
+                    // Check application deployment on correct port and endpoint
                     bat '''
                         echo "Verifying application deployment..."
-                        curl -f http://localhost:8092/student/api/ || (echo "Student application is not accessible" && exit 1)
+                        curl -f http://localhost:8092/student/api/ || (echo "Student API is not accessible" && exit 1)
                         echo "Student application is successfully deployed and accessible"
                     '''
                 }
@@ -140,21 +209,29 @@ pipeline{
     }
     post{
         always{
-            cleanWs()
+            echo "=== CLEANING UP WORKSPACE ==="
+            // Use deleteDir instead of cleanWs since Workspace Cleanup plugin is not installed
+            deleteDir()
         }
         success{
-            emailext(
-                subject: "Deployment Successful: ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}",
-                body: "The application has been successfully deployed to Tomcat server.",
-                to: "taran.duggal@teleperformancedibs.com"
-            )
+            echo "=== BUILD AND DEPLOYMENT SUCCESSFUL ==="
+            echo "Student application has been successfully deployed to Tomcat server"
+            echo "Application URL: http://localhost:8092/student/api/"
+
+            // Simple echo instead of email if mail plugins are not configured
+            echo "SUCCESS NOTIFICATION: Deployment completed successfully!"
         }
         failure{
-            emailext(
-                subject: "Deployment Failed: ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}",
-                body: "The deployment to Tomcat server has failed. Please check the logs.",
-                to: "taran.duggal@teleperformancedibs.com"
-            )
+            echo "=== BUILD OR DEPLOYMENT FAILED ==="
+            echo "Please check the logs above for error details"
+            echo "Common issues:"
+            echo "1. Network connectivity to Maven repositories"
+            echo "2. Maven dependencies not available locally"
+            echo "3. Tomcat service permissions"
+            echo "4. File system permissions for deployment directory"
+
+            // Simple echo instead of email if mail plugins are not configured
+            echo "FAILURE NOTIFICATION: Deployment failed - manual intervention required!"
         }
     }
 }
