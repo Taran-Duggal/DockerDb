@@ -172,95 +172,35 @@ pipeline{
             }
         }
 
-        stage('Stop Tomcat (Admin Required)'){
-            steps{
-                script{
-                    if(env.TOMCAT_RUNNING == 'true') {
-                        echo "=== Attempting to Stop Tomcat Service ==="
-                        echo "⚠️  This step requires Administrator privileges"
+        stage('Stop Tomcat') {
+                    steps {
+                        script {
+                            echo "=== Stopping Tomcat Service ==="
 
-                        try {
-                            // Method 1: Try direct service stop
-                            echo "Method 1: Attempting direct service stop..."
-                            bat "net stop ${TOMCAT_SERVICE}"
-                            echo "✅ Tomcat stopped successfully using direct method"
-                            env.TOMCAT_STOP_METHOD = 'direct'
+                            withCredentials([usernamePassword(
+                                credentialsId: 'tomcat-admin-creds',
+                                usernameVariable: 'ADMIN_USER',
+                                passwordVariable: 'ADMIN_PASS'
+                            )]) {
+                                // Method 1: Using PowerShell with credentials
+                                bat """
+                                    powershell -Command "\$securePass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force; \
+                                    \$credential = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$securePass); \
+                                    Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','net stop ${TOMCAT_SERVICE}' -Credential \$credential -NoNewWindow -Wait"
+                                """
 
-                        } catch (Exception e1) {
-                            echo "❌ Direct method failed: ${e1.getMessage()}"
-
-                            try {
-                                // Method 2: Try with explicit admin check
-                                echo "Method 2: Attempting with explicit admin verification..."
-                                bat '''
-                                    echo "Checking for admin privileges..."
-                                    net session >nul 2>&1
-                                    if errorlevel 1 (
-                                        echo "❌ This script requires Administrator privileges"
-                                        echo "Please run Jenkins as Administrator or use 'Run as Administrator'"
-                                        exit 1
-                                    ) else (
-                                        echo "✅ Administrator privileges confirmed"
-                                    )
-                                '''
-                                bat "net stop ${TOMCAT_SERVICE}"
-                                echo "✅ Tomcat stopped successfully with admin verification"
-                                env.TOMCAT_STOP_METHOD = 'admin_verified'
-
-                            } catch (Exception e2) {
-                                echo "❌ Admin method also failed: ${e2.getMessage()}"
-
-                                // Method 3: Try using PowerShell with elevated privileges
-                                try {
-                                    echo "Method 3: Attempting with PowerShell..."
-                                    bat '''
-                                        powershell -Command "& {
-                                            if (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')) {
-                                                Write-Host '❌ PowerShell session is not running as Administrator'
-                                                exit 1
-                                            } else {
-                                                Write-Host '✅ PowerShell running with Administrator privileges'
-                                                Stop-Service -Name 'Tomcat10' -Force
-                                                Write-Host '✅ Tomcat stopped using PowerShell'
-                                            }
-                                        }"
-                                    '''
-                                    env.TOMCAT_STOP_METHOD = 'powershell'
-
-                                } catch (Exception e3) {
-                                    echo "❌ All methods failed to stop Tomcat"
-                                    echo "🔧 MANUAL INTERVENTION REQUIRED:"
-                                    echo "1. Open Command Prompt as Administrator"
-                                    echo "2. Run: net stop ${TOMCAT_SERVICE}"
-                                    echo "3. Or use Services.msc to stop Tomcat service"
-                                    echo "4. Then resume Jenkins pipeline"
-
-                                    // Don't fail the build, but mark for manual intervention
-                                    env.MANUAL_TOMCAT_STOP = 'true'
-                                    echo "⚠️  Proceeding with deployment - Tomcat may still be running"
+                                // Verify service stopped
+                                def status = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
+                                if(status.contains("STOPPED")) {
+                                    echo "✅ Tomcat service confirmed stopped"
+                                } else {
+                                    error("❌ Failed to stop Tomcat service")
                                 }
                             }
                         }
-
-                        // Wait for service to fully stop
-                        if(env.MANUAL_TOMCAT_STOP != 'true') {
-                            echo "⏳ Waiting for Tomcat to fully stop..."
-                            bat 'powershell -Command "Start-Sleep -Seconds 15"'
-
-                            // Verify service is stopped
-                            def stopStatus = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
-                            if(stopStatus.contains("STOPPED")) {
-                                echo "✅ Tomcat service confirmed stopped"
-                            } else {
-                                echo "⚠️  Tomcat may still be running: ${stopStatus}"
-                            }
-                        }
-                    } else {
-                        echo "ℹ️  Tomcat was not running - skipping stop step"
                     }
                 }
-            }
-        }
+
 
         stage('Deploy Application'){
             steps{
@@ -290,37 +230,29 @@ pipeline{
             }
         }
 
-        stage('Start Tomcat'){
-            steps{
-                script{
+        stage('Start Tomcat') {
+            steps {
+                script {
                     echo "=== Starting Tomcat Service ==="
 
-                    try {
-                        bat "net start ${TOMCAT_SERVICE}"
-                        echo "✅ Tomcat started successfully"
-                        env.TOMCAT_START_SUCCESS = 'true'
+                    withCredentials([usernamePassword(
+                        credentialsId: 'tomcat-admin-creds',
+                        usernameVariable: 'ADMIN_USER',
+                        passwordVariable: 'ADMIN_PASS'
+                    )]) {
+                        bat """
+                            powershell -Command "\$securePass = ConvertTo-SecureString '${ADMIN_PASS}' -AsPlainText -Force; \
+                            \$credential = New-Object System.Management.Automation.PSCredential('${ADMIN_USER}', \$securePass); \
+                            Start-Process -FilePath 'cmd.exe' -ArgumentList '/c','net start ${TOMCAT_SERVICE}' -Credential \$credential -NoNewWindow -Wait"
+                        """
 
-                    } catch (Exception e) {
-                        echo "❌ Failed to start Tomcat: ${e.getMessage()}"
-
-                        // Check if it's already running
+                        // Verify service started
                         def status = bat(script: "sc query ${TOMCAT_SERVICE} | findstr STATE", returnStdout: true).trim()
                         if(status.contains("RUNNING")) {
-                            echo "ℹ️  Tomcat is already running"
-                            env.TOMCAT_START_SUCCESS = 'true'
+                            echo "✅ Tomcat service confirmed running"
                         } else {
-                            echo "🔧 MANUAL INTERVENTION REQUIRED:"
-                            echo "Please manually start Tomcat using one of these methods:"
-                            echo "1. Command Prompt as Admin: net start ${TOMCAT_SERVICE}"
-                            echo "2. Services.msc: Start Apache Tomcat service"
-                            echo "3. Tomcat bin directory: startup.bat"
-                            env.TOMCAT_START_SUCCESS = 'false'
+                            error("❌ Failed to start Tomcat service")
                         }
-                    }
-
-                    if(env.TOMCAT_START_SUCCESS == 'true') {
-                        echo "⏳ Waiting for Tomcat to fully start and deploy application..."
-                        bat 'powershell -Command "Start-Sleep -Seconds 45"'
                     }
                 }
             }
