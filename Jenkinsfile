@@ -21,26 +21,29 @@ pipeline {
         stage('Deploy to Tomcat') {
             steps {
                 script {
-                    def tomcatWebapps = 'C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps'
-                    def jenkinsWar = 'target\\your-app.war' // Replace with actual war name
+                    def tomcatWebapps = '"C:\\Program Files\\Apache Software Foundation\\Tomcat 10.1\\webapps"'
                     def backupDir = "${tomcatWebapps}\\backup"
+                    def warName = "student.war"
+                    def warSource = "\"${env.WORKSPACE}\\target\\${warName}\""
+                    def warDest = "${tomcatWebapps}\\${warName}"
 
-                    // Ensure backup directory exists
+                    // Create backup directory
                     bat "mkdir ${backupDir}"
 
                     // Backup existing WAR
                     bat """
-                        if exist ${tomcatWebapps}\\your-app.war (
-                            copy ${tomcatWebapps}\\your-app.war ${backupDir}\\your-app_backup_%DATE:~10,4%-%DATE:~4,2%-%DATE:~7,2%_%TIME:~0,2%-%TIME:~3,2%-%TIME:~6,2%.war
-                            del ${tomcatWebapps}\\your-app.war
+                        if exist ${warDest} (
+                            copy ${warDest} ${backupDir}\\${warName}_backup_%DATE:~10,4%-%DATE:~4,2%-%DATE:~7,2%_%TIME:~0,2%-%TIME:~3,2%-%TIME:~6,2%.war
+                            del ${warDest}
                         )
                     """
 
                     // Copy new WAR to Tomcat
-                    bat "copy ${jenkinsWar} ${tomcatWebapps}\\your-app.war"
+                    bat "copy ${warSource} ${warDest}"
                 }
             }
         }
+
 
 
         stage('Test Maven - JUnit') {
