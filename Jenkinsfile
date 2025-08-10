@@ -181,7 +181,7 @@ pipeline {
                 script {
                     echo "=== Verifying Deployment ==="
 
-                    // Check files were deployed
+                    // 1. Verify WAR file exists
                     bat """
                         if not exist "${TOMCAT_WEBAPPS}\\${APP_NAME}.war" (
                             echo ❌ WAR file not deployed
@@ -190,7 +190,14 @@ pipeline {
                         echo ✅ WAR file deployed
                     """
 
-                    // Test application health endpoint
+                    // 2. Start Tomcat if not running
+                    if (env.TOMCAT_RUNNING == 'false') {
+                        echo "Starting Tomcat service..."
+                        bat "net start ${TOMCAT_SERVICE}"
+                        sleep(time: 30, unit: 'SECONDS') // Wait for Tomcat to start
+                    }
+
+                    // 3. Test application health endpoints with proper curl commands
                     def healthy = false
                     def endpoints = [
                         "http://localhost:8080/${APP_NAME}/api/health",
@@ -201,7 +208,7 @@ pipeline {
                         try {
                             def status = bat(
                                 script: """
-                                    curl -s -o nul -w "%{http_code}" --connect-timeout 10 "${endpoint}"
+                                    curl -s -o nul -w "%%{http_code}" --connect-timeout 10 "${endpoint}"
                                 """,
                                 returnStdout: true
                             ).trim()
@@ -210,6 +217,8 @@ pipeline {
                                 healthy = true
                                 echo "✅ Endpoint ${endpoint} is healthy (HTTP 200)"
                                 break
+                            } else {
+                                echo "⚠️ Endpoint ${endpoint} returned HTTP ${status}"
                             }
                         } catch (Exception e) {
                             echo "⚠️ Failed to check ${endpoint}: ${e.getMessage()}"
@@ -217,43 +226,11 @@ pipeline {
                     }
 
                     if (!healthy) {
-                        echo "⚠️ No healthy endpoints found - application may still be starting"
+                        echo "⚠️ No healthy endpoints found - check Tomcat logs"
                         currentBuild.result = 'UNSTABLE'
                     }
                 }
             }
-        }
-    }
-
-    post {
-        always {
-            echo "=== Cleaning Workspace ==="
-            deleteDir()
-
-            // Final status report
-            echo """
-            === Deployment Summary ===
-            Backup Location: ${env.BACKUP_FILE ?: 'N/A'}
-            Tomcat Status: ${env.TOMCAT_RUNNING == 'true' ? 'Was running' : 'Was stopped'}
-            Build Source: ${currentBuild.result == 'SUCCESS' ? 'Online' : 'Offline'}
-            """
-        }
-        success {
-            echo "🎉 Pipeline completed successfully!"
-        }
-        unstable {
-            echo "⚠️ Pipeline completed with warnings"
-            echo "Application may still be starting - check Tomcat logs if endpoints aren't responding"
-        }
-        failure {
-            echo """
-            ❌ Pipeline failed
-            Troubleshooting Steps:
-            1. Verify DNS resolution for ${MAVEN_REPO_URL}
-            2. Check Maven build logs for errors
-            3. Verify Tomcat service account has write permissions to ${TOMCAT_WEBAPPS}
-            4. Check Jenkins agent connectivity
-            """
         }
     }
 }
